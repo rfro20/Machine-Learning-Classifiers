@@ -164,13 +164,13 @@ BATCH_SIZE = 256 #128
 
 # Loss Function
 loss_fn = tf.keras.losses.categorical_crossentropy
-# Why don't you try these as well?
+
 #loss_fn = tf.keras.losses.MeanSquaredError()
 #loss_fn = tf.keras.losses.Hinge()
 
 # Optimization Method
 optimizer = tf.keras.optimizers.Adam(learning_rate=0.001,beta_1=0.9,beta_2=0.999,epsilon=1e-07,amsgrad=False)
-# Why don't you try these as well?
+
 # tf.keras.optimizers.SGD(learning_rate=0.01, momentum=0.0, nesterov=False)
 # tf.keras.optimizers.Adagrad(learning_rate=0.001,initial_accumulator_value=0.1,epsilon=1e-07)
 
