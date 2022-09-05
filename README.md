@@ -1,6 +1,6 @@
  # Machine-Learning-Classifiers
 
-Welcome to my Machine Learning projects! The work in this repository is split into two main projects: Project 1, and Project 2. Below you can find information about each project.
+Welcome to my Machine Learning projects! The work in this repository is split into two main projects: Project 1, and Project 2. Below you can find information about each project, along with the README in the individual project folders.
 
 
 ## Project 1: Bayesian / KNN Classification
