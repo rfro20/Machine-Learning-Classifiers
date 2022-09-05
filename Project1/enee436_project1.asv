@@ -1,0 +1,565 @@
+%% ENEE 436: Project 1 -- Two Classification Tasks
+% By: Ryan Frohman
+
+%% Load Face Data - Classification Task 2
+clear, clc
+
+test_ratio = 0.2;
+
+load(['data.mat'])
+Ns = 200;
+face_n = face(:,:,1:3:3*Ns);
+face_x = face(:,:,2:3:3*Ns);
+face_il = face(:,:,3:3:3*Ns);
+i = randi([1,Ns],1);
+    
+% Convert the dataset in data vectors and labels for
+% neutral vs facial expression classification
+data = [];
+labels = [];
+[m,n] = size(face_n(:,:,i));
+for subject=1:Ns
+    %neutral face: label 0
+    face_n_vector = reshape(face_n(:,:,subject),1,m*n);
+    data = [data ; face_n_vector];
+    labels = [labels 0];
+    %face with expression: label 1
+    face_x_vector = reshape(face_x(:,:,subject),1,m*n);
+    data = [data ; face_x_vector];
+    labels = [labels 1];
+end
+
+% Split to train and test data
+[data_len,data_size] = size(data);
+N = round((1-test_ratio)* data_len);
+idx = randperm(data_len);
+train_data = data(idx(1:N),:)';
+train_labels = labels(idx(1:N));
+test_data = data(idx(N+1:2*Ns),:)';
+test_labels = labels(idx(N+1:2*Ns));
+
+% Adjustment to train_data and test_data: converted to column vector to
+% for consistency with course concepts of column vector manipulation
+
+% Apply PCA on the dataset
+training_mean = mean(train_data, 2);
+expression_size = sum(train_labels == 1);
+neutral_size = sum(train_labels == 0);
+
+% First, compute centralized covariance matrix C_hat
+C_hat = zeros(size(train_data, 1));
+for k = 1:size(train_data, 2)
+    C_hat = C_hat + ((train_data(:,k) - training_mean) * ((train_data(:,k) - training_mean)'));
+end
+C_hat = C_hat / size(train_data, 2);
+
+% Third, find the m-highest eigenvectors of C_hat corresponding to its m
+% highest eigenvalues
+
+[eigenvectors, eigenvalues] = eig(C_hat);
+[d, ind] = sort(diag(eigenvalues));
+eigenvalues = eigenvalues(ind, ind);
+eigenvectors = eigenvectors(:,ind);
+m = 40; % Project down onto m dimensions
+disp("Projecting the data onto " + m + " dimensions by PCA")
+eigenvalues = eigenvalues(504-m+1:504, 504-m+1:504);
+eigenvectors = flip(eigenvectors(:, 504-m+1:504), 2);
+
+% Lastly, translate each data point into the new dimension by multiplying
+% each data point by the transpose of each eigenvector and assembling the
+% products into a single m-dimensional vector
+reduced_data = [];
+for k = 1:size(train_data, 2)
+    reduced_vec = [];
+    for vec = 1:size(eigenvectors, 2)
+        projection = eigenvectors(:,vec)' * train_data(:,k);
+        reduced_vec = [reduced_vec; projection];
+    end
+    reduced_data = [reduced_data, reduced_vec];
+end
+
+
+% Project Test Data down to m dimensions as well
+reduced_test_data = [];
+test_mean = mean(test_data, 2);
+for k = 1:size(test_data, 2)
+    reduced_test_vec = [];
+    for vec = 1:size(eigenvectors, 2)
+        projection = eigenvectors(:,vec)' * (test_data(:,k) - test_mean);
+        reduced_test_vec = [reduced_test_vec; projection];
+    end
+    reduced_test_data = [reduced_test_data, reduced_test_vec];
+end
+ 
+% Now, apply LDA on the dataset
+
+% First, calculate means in post-PCA dimensions
+neutral_mean_reduced = zeros(m,1);
+
+expression_mean_reduced = zeros(m,1);
+
+for point = 1:size(reduced_data, 2)
+    if train_labels(point) == 0
+        neutral_mean_reduced = neutral_mean_reduced + reduced_data(:,point);
+        
+    else
+        expression_mean_reduced = expression_mean_reduced + reduced_data(:,point);
+        
+    end
+end
+neutral_mean_reduced = neutral_mean_reduced / neutral_size;
+expression_mean_reduced = expression_mean_reduced / expression_size;
+
+% First, calculate Sw = S1 + S2
+
+S1 = zeros(m);
+S2 = zeros(m);
+
+for point = 1:size(reduced_data, 2)
+    if train_labels(point) == 0
+        S1 = S1 + ((reduced_data(:,point) - neutral_mean_reduced) * (reduced_data(:,point) - neutral_mean_reduced)');
+    else
+        S2 = S2 + ((reduced_data(:,point) - expression_mean_reduced) * (reduced_data(:,point) - expression_mean_reduced)');
+    end
+end
+
+Sw = S1 + S2;
+
+disp("Projecting the data onto 1 dimension by LDA")
+% Find the optimal solution by multiplying Sw^-1 by (the difference
+% of the means), and then normalizing the solution
+w = inv(Sw) * (neutral_mean_reduced - expression_mean_reduced);
+w = w / norm(w);
+
+% Now, project the data down onto w
+onedimensional_data = [];
+for k = 1:size(reduced_data, 2)
+    onedimensional_data = [onedimensional_data, (w' * reduced_data(:,k))];
+end
+
+% Project test data down as well
+onedimensional_test_data = [];
+for k = 1:size(reduced_test_data, 2)
+    onedimensional_test_data = [onedimensional_test_data, (w' * reduced_test_data(:,k))];
+end
+
+% Now that data is projected (onto 1 dimension) using LDA, perform Gaussian
+% Assumption for both classes and calculate parameters using MLE.
+
+neutral_mle_mean = 0;
+expression_mle_mean = 0;
+
+% Calculate sample means for both classes
+for k = 1:size(onedimensional_data, 2)
+    if train_labels(k) == 0
+        neutral_mle_mean = neutral_mle_mean + onedimensional_data(k);
+    else
+        expression_mle_mean = expression_mle_mean + onedimensional_data(k);
+    end
+end
+neutral_mle_mean = neutral_mle_mean / neutral_size;
+expression_mle_mean = expression_mle_mean / expression_size;
+
+% Calculate sample variances for both classes
+neutral_mle_variance = 0;
+expression_mle_variance = 0;
+for k = 1:size(onedimensional_data, 2)
+    if train_labels(k) == 0
+        neutral_mle_variance = neutral_mle_variance + ((neutral_mle_mean - onedimensional_data(k))^2);
+    else
+        expression_mle_variance = expression_mle_variance + ((expression_mle_mean - onedimensional_data(k))^2);
+    end
+end
+neutral_mle_variance = neutral_mle_variance / neutral_size;
+expression_mle_variance = expression_mle_variance / expression_size;
+
+% Now, perform Bayesian classification on the test data
+% discriminant function can just be p(x|wi) * p(wi) for i = 1,2
+
+bayesian_classifications = zeros(1, 80);
+for k = 1:size(onedimensional_test_data, 2)
+    point = onedimensional_test_data(k);
+    neutral_discriminant = 1/(2*pi*neutral_mle_variance) * exp(-0.5 * (point-neutral_mle_mean)^2 / neutral_mle_variance) * (neutral_size / size(train_data, 2));
+    expression_discriminant = 1/(2*pi*expression_mle_variance) * exp(-0.5 * (point-expression_mle_mean)^2 / expression_mle_variance) * (expression_size / size(train_data, 2));
+    if neutral_discriminant > expression_discriminant
+        bayesian_classifications(k) = 0;
+    else
+        bayesian_classifications(k) = 1;
+    end
+end
+
+% Check Success Rate of Bayesian Classification
+bayesian_successes = 0;
+for k = 1:size(test_labels, 2)
+    if bayesian_classifications(k) == test_labels(k)
+        bayesian_successes = bayesian_successes + 1;
+    end
+end
+
+disp("Bayesian Success Rate: " + bayesian_successes/80 * 100 + "%")
+
+% Now, Perform k-NN Classification on the Test Point
+% Since everything is one dimensional, getting the absolute value of the
+% difference between the two is the distance.
+k_nearest = 11;
+knn_classifications = zeros(1,size(onedimensional_test_data, 2));
+
+for i = 1:size(onedimensional_test_data, 2)
+    curr_point = onedimensional_test_data(i);
+    centered_data = onedimensional_data - curr_point;
+    % Start with first k elements of data being the nearest. If you find
+    % one closer, remove the farthest element from the array. Always keep
+    % track of the farthest.
+    nearest = zeros(1,k_nearest);
+    nearest_indices = zeros(1,k_nearest);
+    for j = 1:k_nearest
+        % Populate the array with the distances of the first k points
+        % (assuming k <= # of points)
+        nearest_indices(j) = j;
+        nearest(j) = abs(centered_data(j));
+    end
+
+    farthest = max(nearest);
+    farthest_index = find(nearest==farthest);
+
+    for j = k_nearest+1:size(onedimensional_data, 2)
+        if abs(centered_data(j)) < farthest
+            % Found a point closer, so swap the farthest with the point
+            nearest_indices(nearest_indices == farthest_index) = j;
+            nearest(nearest == farthest) = abs(centered_data(j));
+        end
+        farthest = max(nearest);
+        farthest_index = find(nearest==farthest);
+    end
+
+    % Now, find the majority class in the nearest vector, and classify the
+    % point as that.
+    nn_sum = 0;
+    for j = 1:size(nearest_indices, 2)
+        nn_sum = nn_sum + train_labels(nearest_indices(j));
+    end
+
+    if nn_sum > k_nearest/2
+        knn_classifications(i) = 1;
+    else
+        knn_classifications(i) = 0;
+    end
+end
+
+knn_successes = 0;
+for k = 1:size(test_labels, 2)
+    if knn_classifications(k) == test_labels(k)
+        knn_successes = knn_successes + 1;
+    end
+end
+
+disp("KNN Success Rate: " + knn_successes/80 * 100 + "%")
+
+%% Load Pose Data - Classification Task 1
+clear, clc
+
+test_ratio = 0.2;
+
+load(['pose.mat'])
+[rows,columns,images,subjects]= size(pose);
+
+% Show some examples of dataset
+if true
+    %figure,
+    %sgtitle('POSE: Example of 3 images of a random subject')
+    s = randi([1,subjects],1);
+    %subplot(1,3,1),imshow(uint8(pose(:,:,1,s)))
+    %subplot(1,3,2),imshow(uint8(pose(:,:,2,s)))
+    %subplot(1,3,3),imshow(uint8(pose(:,:,3,s)))   
+end
+
+% Convert the datase in data vectors and labels for subject identification
+data = [];
+labels = [];
+for s=1:subjects
+    for i=1:images
+        pose_vector = reshape(pose(:,:,i,s),1,rows*columns);
+        data = [data;pose_vector];
+        labels = [labels s];        
+    end
+end
+
+% Split to train and test data
+[data_len,data_size] = size(data);
+N = round((1-test_ratio)* data_len);
+idx = randperm(data_len);
+train_data = data(idx(1:N),:)';
+train_labels = labels(idx(1:N));
+test_data = data(idx(N+1:data_len),:)';
+test_labels = labels(idx(N+1:data_len));
+
+% Note: Took the transpose of train_data and test_data to turn them into
+% column vectors, staying consistent with the course material.
+
+num_classes = 68; % number of classes
+
+% Get number of elements in each class for training data
+sizes = zeros(1, 68);
+for i = 1:size(train_data, 2)
+    sizes(train_labels(i)) = sizes(train_labels(i)) + 1;
+end
+
+% Apply PCA on dataset
+
+training_mean = mean(train_data, 2);
+% Next, compute centralized covariance matrix C_hat
+C_hat = zeros(size(train_data, 1));
+for i = 1:size(train_data, 2)
+    C_hat = C_hat + ((train_data(:,i) - training_mean) * (train_data(:,i) - training_mean)');
+end
+C_hat = (1/size(train_data, 2) * C_hat);
+
+% Now, find m highest eigenvectors of C_hat corresponding to the m highest
+% eigenvalues
+
+[eigenvectors, eigenvalues] = eig(C_hat);
+[d, ind] = sort(diag(eigenvalues));
+eigenvalues = eigenvalues(ind, ind);
+eigenvectors = eigenvectors(:,ind);
+m = 150; % PCA projection down onto m dimensions (use 400)
+disp("Projecting the data onto " + m + " dimensions by PCA")
+eigenvectors = flip(eigenvectors(:, 1920-m+1:1920), 2);
+
+% Now, project the data down onto m dimensions by multiplying
+% each data point by the transpose of each eigenvector and assembling the
+% products into a single m-dimensional vector
+reduced_data = [];
+for k = 1:size(train_data, 2)
+    reduced_vec = [];
+    for vec = 1:size(eigenvectors, 2)
+        projection = eigenvectors(:,vec)' * train_data(:,k);
+        reduced_vec = [reduced_vec; projection];
+    end
+    reduced_data = [reduced_data, reduced_vec];
+end
+
+% Project the test data down to m dimensions as well
+% Project Test Data down to m dimensions as well
+reduced_test_data = [];
+for k = 1:size(test_data, 2)
+    reduced_test_vec = [];
+    for vec = 1:size(eigenvectors, 2)
+        projection = eigenvectors(:,vec)' * (test_data(:,k) - mean(test_data, 2));
+        reduced_test_vec = [reduced_test_vec; projection];
+    end
+    reduced_test_data = [reduced_test_data, reduced_test_vec];
+end
+
+% Now, apply MDA to the data
+
+% First, calculate means (mi's) in m-dimensions
+reduced_means = zeros(size(reduced_test_data, 1), 68);
+reduced_sizes = sizes; % amount of train points from each class doesn't change
+
+for i = 1:size(train_data, 2)
+    reduced_means(:,train_labels(i)) = reduced_means(:,train_labels(i)) + reduced_data(:,i);
+end
+
+for i = 1:size(reduced_means, 2)
+    reduced_means(:,i) = (1/reduced_sizes(i)) * reduced_means(:,i);
+end
+
+% Calculate m, the weighted average of all mi's
+reduced_average_mean = zeros(size(reduced_test_data, 1), 1);
+for i = 1:68
+    reduced_average_mean = reduced_average_mean + (reduced_sizes(i) * reduced_means(:,i));
+end
+reduced_average_mean = (1/size(reduced_data, 2)) * reduced_average_mean;
+
+% Calculate Sb
+
+Sb = zeros(size(reduced_average_mean, 1));
+for i = 1:68
+    Sb = Sb + reduced_sizes(i) * ((reduced_means(:,i) - reduced_average_mean) * (reduced_means(:,i) - reduced_average_mean)');
+end
+
+% Now, Calculate Sw = Sum of Si for all i = 1:68
+
+% Initialize cell array of All Si's
+Sis = cell(1,68);
+for i = 1:size(Sis, 2)
+    Sis{i} = zeros(size(reduced_data, 1));
+end
+
+% Add to each Si based on class of each data point.
+for i = 1:size(reduced_data, 2)
+    component = (reduced_data(:,i) - reduced_means(train_labels(i))) * (reduced_data(:,i) - reduced_means(train_labels(i)))';
+    Sis{train_labels(i)} = Sis{train_labels(i)} + component;
+end
+
+Sw = zeros(size(reduced_data, 1));
+for i = 1:size(Sis, 2) 
+    Sw = Sw + Sis{i};
+end
+
+[eigenvectors, eigenvalues] = eig(inv(Sw) * Sb);
+[eigenvalues, ind] = sort(diag(eigenvalues));
+eigenvectors = eigenvectors(:,ind);
+n = 30; % Choosing to project onto n dimensions
+disp("Projecting the data onto " + n + " dimensions by MDA")
+eigenvectors = flip(eigenvectors(:, m-n+1:m), 2);
+
+ndim_train_data = [];
+for i = 1:size(reduced_data, 2)
+    ndim_vec = [];
+    for j = 1:n
+        ndim_vec = [ndim_vec; eigenvectors(:,j)' * reduced_data(:,i)];
+    end
+    ndim_train_data = [ndim_train_data, ndim_vec];
+end
+
+% Project test data down to n dimensions as well
+ndim_test_data = [];
+for i = 1:size(reduced_test_data, 2)
+    ndim_test_vec = [];
+    for j = 1:n
+        ndim_test_vec = [ndim_test_vec; eigenvectors(:,j)' * reduced_test_data(:,i)];
+    end
+    ndim_test_data = [ndim_test_data, ndim_test_vec];
+end
+
+% Now that data is project down to n-dimensions using PCA and LDA, 
+% perform gaussian assumption and use MLE for mean vector and covariance
+% matrix of each class.
+
+% MLE for n-dimensional mean vectors
+ndim_means = zeros(n, 68);
+ndim_sizes = sizes;
+for i = 1:size(ndim_train_data, 2)
+    ndim_means(:,train_labels(i)) = ndim_means(:,train_labels(i)) + ndim_train_data(:,i);
+end
+
+for i = 1:size(ndim_means, 2)
+    ndim_means(:,i) = (1 / ndim_sizes(i)) * ndim_means(:,i);
+end
+
+% MLE for nxn covariance matrices
+ndim_covmatrices = cell(1,68);
+for i = 1:size(ndim_covmatrices, 2)
+    ndim_covmatrices{i} = zeros(n);
+end
+for i = 1:size(ndim_train_data, 2)
+    difference = (ndim_train_data(:,train_labels(i)) - ndim_means(:,train_labels(i)));
+    body = difference * difference';
+    ndim_covmatrices{train_labels(i)} = ndim_covmatrices{train_labels(i)} + body;
+end
+for i = 1:size(ndim_covmatrices, 2)
+    ndim_covmatrices{i} = (1/ndim_sizes(i)) * ndim_covmatrices{i};
+end
+
+% Now, perform Bayesian classification on test data
+% Algorithm: Iterate through test points, and for each point keep track of
+% a max discriminant function and its class. At the end of the loop, assign
+% the test point to its highest probability class.
+% gi(x) = -0.5*ln(det(cov)) - 0.5 * (x-mui)' * inv(cov) * (x-mui) + ln(P(wi))
+bayesian_classifications = zeros(1, size(ndim_test_data, 2));
+
+for i = 1:size(ndim_test_data, 2)
+    max_discriminant = -Inf;
+    max_class = -1;
+
+    curr_point = ndim_test_data(:,i);
+    % Check each class' discriminant
+    for j = 1:size(ndim_means, 2)
+        curr_mean = ndim_means(:,j);
+        curr_cov = ndim_covmatrices{j} + (0.0001 * eye(n));
+        first_term = -0.5 * log(det(curr_cov));
+        second_term = -0.5 * (curr_point - curr_mean)' * inv(curr_cov) *  (curr_point - curr_mean);
+        prior = ndim_sizes(j) / size(ndim_train_data, 2);
+        discriminant = first_term + second_term + prior;
+        if discriminant > max_discriminant
+            max_discriminant = discriminant;
+            max_class = j;
+        end
+    end
+    bayesian_classifications(i) = max_class;
+end
+
+successes = 0;
+for i = 1:size(bayesian_classifications, 2)
+    if bayesian_classifications(i) == test_labels(i)
+        successes = successes + 1;
+    end
+end
+disp("Bayesian Success Rate: " + successes / size(test_labels, 2) * 100 + "%")
+
+% Now, perform k-Nearest Neighbor Classification on the Test Data
+k_nearest = 20;
+knn_classifications = zeros(1, size(ndim_test_data, 2));
+for i = 1:size(ndim_test_data, 2)
+    curr_point = ndim_test_data(:,i);
+    nearest = zeros(1, k_nearest);
+    nearest_indices = zeros(1, k_nearest);
+    % Start with first k elements of data being the nearest. If you find
+    % one closer, remove the farthest element from the array. Always keep
+    % track of the farthest.
+    for j = 1:k_nearest
+        nearest(j) = norm(curr_point - ndim_train_data(:,j));
+        nearest_indices(j) = j;
+    end
+    farthest = max(nearest);
+    farthest_index = find(nearest == farthest);
+
+    for j = k_nearest+1:size(ndim_train_data, 2)
+        curr_distance = norm(curr_point - ndim_train_data(:,j));
+        if curr_distance < farthest
+            % Found a closer point, so replace that with the farthest
+            nearest_indices(nearest_indices == farthest_index) = j;
+            nearest(nearest == farthest) = curr_distance;
+        end
+        % Recalculate the farthest value
+        farthest = max(nearest);
+        farthest_index = find(nearest==farthest);   
+    end
+    
+    % Now, iterate through the nearest indices list and check the classes
+    % of each of the training points. Assign the test point to the class
+    % with the highest number of nearest neighbors.
+    knearest_representations = zeros(1, size(ndim_means, 2));
+
+    for j = 1:size(nearest_indices, 2)
+        curr_class = train_labels(nearest_indices(j));
+        knearest_representations(curr_class) = knearest_representations(curr_class) + 1;
+    end
+    highest_representation = max(knearest_representations);
+    possible_classifications = find(knearest_representations == highest_representation);
+    
+    % If there is a tie in k-nearest, find the class with the overall closest
+    % distance by taking a sum of all of the points and picking the class 
+    % with the smallest sum
+
+    if size(possible_classifications, 2) > 1
+        class_sums = zeros(1, size(possible_classifications, 2));
+        for j = 1:size(possible_classifications, 2)
+            % Go through k-nearest and find sum of distances for each class
+            for k = 1:size(nearest_indices, 2)
+                curr_class = train_labels(nearest_indices(k));
+                if find(possible_classifications == curr_class)
+                    index = find(possible_classifications == curr_class);
+                    class_sums(index) = class_sums(index) + nearest(k); 
+                end
+                
+            end 
+        end
+        
+        knn_classifications(i) = possible_classifications(class_sums == min(class_sums));
+    else
+        % Otherwise, assign the kNN classification to the only choice
+        knn_classifications(i) = possible_classifications;
+    end
+    
+end
+
+knn_successes = 0;
+for k = 1:size(test_labels, 2)
+    if knn_classifications(k) == test_labels(k)
+        knn_successes = knn_successes + 1;
+    end
+end
+
+disp("KNN Success Rate: " + knn_successes/size(test_labels, 2) * 100 + "%")
